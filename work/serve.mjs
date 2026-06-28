@@ -24,6 +24,12 @@ const MIME_TYPES = {
   ".ico": "image/x-icon",
 };
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 const cache = {
   loadedAt: Date.now(),
   loading: null,
@@ -108,6 +114,7 @@ function clamp(value, min, max) {
 
 function sendJson(res, payload, statusCode = 200) {
   res.writeHead(statusCode, {
+    ...CORS_HEADERS,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
     Pragma: "no-cache",
@@ -326,7 +333,12 @@ async function handleApi(url, res) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, CORS_HEADERS);
+      res.end();
+      return;
+    }
+const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 
     if (requestUrl.pathname.startsWith("/api/")) {
       const handled = await handleApi(requestUrl, res);
