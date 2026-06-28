@@ -34,6 +34,7 @@ let searchTimer = null;
 let refreshTimer = null;
 const historyCache = new Map();
 const chartCache = new Map();
+const API_BASE = "https://a-share-stock-helper.onrender.com";
 const chartModes = [
   { key: "time", label: "分时" },
   { key: "day", label: "日线" },
@@ -700,7 +701,7 @@ function applyExternalRows() {
   }
 }
 async function api(path, params = {}) {
-  const url = new URL(path, window.location.origin);
+  const url = new URL(path, API_BASE);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, String(value));
@@ -708,7 +709,13 @@ async function api(path, params = {}) {
   });
   url.searchParams.set("_ts", String(Date.now()));
   const response = await fetch(url.toString(), { cache: "no-store" });
-  const json = await response.json();
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error("后端没有返回数据，请确认 Render 服务已经启动");
+  }
   if (!response.ok || json.ok === false) {
     throw new Error(json.message || `Request failed: ${response.status}`);
   }
