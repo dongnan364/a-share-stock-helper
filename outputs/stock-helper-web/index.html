@@ -1,0 +1,687 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>A股选股助手</title>
+    <style>
+      :root {
+        --bg: #fbfbfd;
+        --surface: #ffffff;
+        --surface-soft: #f5f5f7;
+        --line: #e6e6eb;
+        --line-strong: #d2d2d7;
+        --text: #1d1d1f;
+        --muted: #6e6e73;
+        --brand: #0071e3;
+        --brand-soft: #e8f2ff;
+        --up: #d70015;
+        --up-bg: #fff1f1;
+        --down: #16833a;
+        --down-bg: #eef9f1;
+        --flat: #6e6e73;
+        --flat-bg: #f5f5f7;
+        --good: #248a3d;
+        --warn: #a66f00;
+        --danger: #c93535;
+        --radius: 22px;
+        --shadow: 0 12px 34px rgba(0, 0, 0, 0.055);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background: var(--bg);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      button, input { font: inherit; }
+      .app {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 12px;
+        z-index: 10;
+        display: grid;
+        grid-template-columns: auto minmax(240px, 420px) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.86);
+        backdrop-filter: blur(20px);
+        box-shadow: var(--shadow);
+      }
+      .brand { display: flex; align-items: center; gap: 10px; min-width: 180px; }
+      .brand-mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        background: #1d1d1f;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+      .brand strong { display: block; font-size: 15px; letter-spacing: -0.02em; }
+      .brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .search-group {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+      }
+      .search {
+        width: 100%;
+        height: 44px;
+        padding: 0 16px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        outline: none;
+        color: var(--text);
+        background: var(--surface-soft);
+      }
+      .search:focus { border-color: rgba(0, 113, 227, 0.38); background: #fff; }
+      .search::placeholder { color: #86868b; }
+      .search-btn {
+        height: 44px;
+        padding: 0 20px;
+        border: 0;
+        border-radius: 999px;
+        background: #1d1d1f;
+        color: #fff;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .search-btn:hover { transform: translateY(-1px); }
+      .nav-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+      .btn {
+        min-height: 40px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--brand);
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn.secondary { color: var(--text); background: var(--surface-soft); }
+      .btn:hover, .tag:hover, .chip:hover, .stock-item:hover { transform: translateY(-1px); }
+      .btn, .tag, .chip, .stock-item { transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease; }
+
+      .hero {
+        margin: 14px 0 18px;
+        text-align: center;
+      }
+      .hero h1 {
+        margin: 0 auto 12px;
+        max-width: 760px;
+        font-size: clamp(38px, 7vw, 72px);
+        line-height: 0.98;
+        letter-spacing: -0.07em;
+        font-weight: 800;
+      }
+      .hero-subtitle {
+        max-width: 660px;
+        margin: 0 auto;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.7;
+      }
+      .stats {
+        display: none;
+      }
+      .stat {
+        padding: 18px 12px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: var(--surface);
+      }
+      .stat strong { display: block; font-size: 30px; letter-spacing: -0.04em; margin-bottom: 4px; }
+      .stat span { color: var(--muted); font-size: 12px; }
+      .stat strong.up { color: var(--up); }
+      .stat strong.down { color: var(--down); }
+      .stat strong.brand-color { color: var(--brand); }
+
+      .minimal-details {
+        width: 100%;
+        max-width: 100%;
+        margin: 18px auto 0;
+        text-align: left;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      summary::-webkit-details-marker { display: none; }
+      .minimal-details > summary,
+      .filter-drawer > summary,
+      .fold-card > summary,
+      .reason-toggle > summary,
+      .mini-disclosure > summary {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        color: var(--text);
+        font-weight: 700;
+      }
+      .minimal-details > summary,
+      .filter-drawer > summary { padding: 16px 18px; }
+      .minimal-details > summary::after,
+      .filter-drawer > summary::after,
+      .fold-card > summary::after,
+      .reason-toggle > summary::after,
+      .mini-disclosure > summary::after {
+        content: "展开";
+        flex: 0 0 auto;
+        color: var(--brand);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      details[open] > summary::after { content: "收起"; }
+      .hero-note, .pill-row, .index-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 0 18px 16px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .hero-note strong { color: var(--text); }
+      .pill-row { padding-top: 0; }
+      .index-row { padding-top: 0; }
+      .market-tape {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        width: 100%;
+      }
+      .market-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .market-label.up { color: var(--up); background: var(--up-bg); border-color: #ffd6d6; }
+      .market-label.down { color: var(--down); background: var(--down-bg); border-color: #ccefd4; }
+      .market-label.flat { color: var(--flat); background: var(--flat-bg); border-color: var(--line); }
+      .market-label .point { color: var(--text); }
+      .market-label.up .point { color: var(--up); }
+      .market-label.down .point { color: var(--down); }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+        align-items: start;
+      }
+      .grid > aside.panel {
+        position: static;
+        max-height: none;
+        overflow: visible;
+      }
+      .panel {
+        min-width: 0;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+      .candidate-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.82fr) minmax(420px, 1.18fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .detail-side {
+        min-width: 0;
+        position: sticky;
+        top: 88px;
+        align-self: start;
+        height: calc(100vh - 104px);
+        max-height: calc(100vh - 104px);
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: #fff;
+      }
+      .detail-side > .panel-head {
+        position: sticky;
+        top: -14px;
+        z-index: 4;
+        margin: -14px -14px 14px;
+        padding: 14px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(18px);
+      }
+      .candidate-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .panel h2 { margin: 0; font-size: 24px; letter-spacing: -0.04em; }
+      .muted, .meta { color: var(--muted); }
+      .small-note { margin-top: 4px; color: var(--muted); font-size: 13px; }
+      .filter-drawer {
+        margin-bottom: 14px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--surface-soft);
+        overflow: hidden;
+      }
+      .filter-drawer > summary span { color: var(--muted); font-size: 13px; font-weight: 600; }
+      .filter-body {
+        display: grid;
+        gap: 10px;
+        padding: 0 14px 14px;
+        overflow: visible;
+      }
+      .filter-group {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #fff;
+      }
+      .filter-group + .filter-group { margin-top: 0; }
+      .filter-title { margin: 9px 0 0; color: var(--muted); font-size: 12px; font-weight: 800; }
+      .tags, .filter-tags, .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .tag, .chip, .label {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .tag, .chip { padding: 8px 12px; cursor: pointer; }
+      .tag.active, .chip.active {
+        color: #fff;
+        border-color: #1d1d1f;
+        background: #1d1d1f;
+      }
+      .label { display: inline-flex; align-items: center; padding: 4px 8px; }
+      .label.good { color: var(--good); background: #effaf2; border-color: #d9f0df; }
+      .label.warn { color: var(--warn); background: #fff8e8; border-color: #f4e4bd; }
+      .label.danger { color: var(--danger); background: #fff0f0; border-color: #f2d2d2; }
+
+      .list {
+        min-width: 0;
+        max-width: 100%;
+        display: grid;
+        gap: 10px;
+        padding: 2px;
+      }
+      .candidate-layout .list {
+        max-height: calc(100vh - 104px);
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding-right: 4px;
+      }
+      .search-tip, .empty, .loading {
+        padding: 16px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 20px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        text-align: center;
+        line-height: 1.7;
+      }
+      .stock-item {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .stock-item.active { border-color: #1d1d1f; background: #fafafa; }
+      .stock-main { min-width: 0; }
+      .stock-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .stock-title strong { font-size: 17px; letter-spacing: -0.02em; }
+      .code { color: var(--muted); font-size: 13px; font-weight: 700; }
+      .quick-row { display: flex; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 13px; }
+      .quick-row span { padding: 6px 9px; border-radius: 999px; background: var(--surface-soft); }
+      .quick-row b { color: var(--text); }
+      .quote-chip strong,
+      .quote-chip em {
+        font-style: normal;
+        font-weight: 800;
+      }
+      .quote-chip.up {
+        color: var(--up);
+        background: var(--up-bg);
+      }
+      .quote-chip.down {
+        color: var(--down);
+        background: var(--down-bg);
+      }
+      .quote-chip.flat {
+        color: var(--flat);
+        background: var(--flat-bg);
+      }
+      .quote-chip.up b,
+      .quote-chip.down b,
+      .quote-chip.flat b { color: inherit; }
+      .vol-chip b { color: inherit; }
+      .vol-chip.hot {
+        color: var(--danger);
+        background: #fff0f0;
+        font-weight: 800;
+      }
+      .vol-chip.mid {
+        color: var(--warn);
+        background: #fff8e8;
+        font-weight: 800;
+      }
+      .vol-chip.calm {
+        color: var(--muted);
+        background: var(--surface-soft);
+      }
+      .vol-text.hot { color: var(--danger); }
+      .vol-text.mid { color: var(--warn); }
+      .vol-text.calm { color: var(--muted); }
+      .mini-disclosure, .reason-toggle { margin-top: 10px; }
+      .mini-disclosure > summary, .reason-toggle > summary {
+        display: inline-flex;
+        justify-content: flex-start;
+        color: var(--brand);
+        font-size: 13px;
+      }
+      .mini-body, .buy-reason, .history-reason, .fold-body {
+        margin-top: 10px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: var(--surface-soft);
+        color: #3a3a3c;
+        line-height: 1.75;
+      }
+      .mini-body p { margin: 0 0 6px; }
+      .mini-body p:last-child { margin-bottom: 0; }
+      .score-pill {
+        min-width: 66px;
+        align-self: start;
+        text-align: center;
+        padding: 10px 8px;
+        border-radius: 18px;
+        background: var(--surface-soft);
+      }
+      .score-pill strong { display: block; font-size: 25px; line-height: 1; letter-spacing: -0.04em; }
+      .score-pill span { color: var(--muted); font-size: 12px; }
+
+      .detail { display: grid; gap: 10px; }
+      .detail-card {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--surface);
+      }
+      .detail-card h3 { margin: 0 0 10px; font-size: 17px; letter-spacing: -0.03em; }
+
+      .direction-card { border-color: rgba(0, 113, 227, 0.2); background: linear-gradient(180deg, #ffffff, #f8fbff); }
+      .direction-block { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.82); }
+      .direction-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
+      .direction-title strong { font-size: 15px; }
+      .direction-title span { padding: 5px 9px; border-radius: 999px; color: var(--brand); background: var(--brand-soft); font-size: 12px; font-weight: 800; }
+      .direction-block p { margin: 0 0 8px; color: var(--text); line-height: 1.7; }
+      .direction-block ul { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.7; }
+      .hit-words { margin-top: 5px; color: var(--muted); }
+      .hit-words b { display: inline-block; margin: 2px 3px 2px 0; padding: 2px 7px; border-radius: 999px; background: var(--surface-soft); color: var(--text); font-size: 12px; }
+      .summary-card { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+      .summary-price { min-width: 100px; text-align: right; }
+      .summary-price span, .summary-price em { display: block; color: var(--muted); font-size: 12px; font-style: normal; }
+      .summary-price strong { display: block; font-size: 28px; letter-spacing: -0.05em; }
+      .summary-price.up strong,
+      .summary-price.up em { color: var(--up); }
+      .summary-price.down strong,
+      .summary-price.down em { color: var(--down); }
+      .summary-price.flat strong,
+      .summary-price.flat em { color: var(--flat); }
+      .chart-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .chart-head h3 { margin: 0; }
+      .chart-tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+      .chart-tab {
+        min-height: 32px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .chart-tab.active { border-color: #1d1d1f; background: #1d1d1f; color: #fff; }
+      .chart-view {
+        min-height: 282px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #fff, #fbfbfd);
+        overflow: hidden;
+      }
+      .price-chart { display: block; width: 100%; height: 252px; }
+      .chart-meta {
+        padding: 0 14px 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .conclusion-grid, .valuation-grid, .buy-zone {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .conclusion-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .conclusion-grid div, .valuation-box, .buy-box {
+        padding: 12px;
+        border-radius: 18px;
+        background: var(--surface-soft);
+      }
+      .conclusion-grid span, .valuation-box span, .buy-box span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+      .conclusion-grid strong, .valuation-box strong, .buy-box strong { color: var(--text); font-size: 15px; }
+      .fold-card { padding: 0; overflow: hidden; }
+      .fold-card > summary { padding: 14px; color: var(--text); font-size: 15px; }
+      .fold-card[open] > summary { border-bottom: 1px solid var(--line); }
+      .fold-card ul { margin: 0; padding: 14px 14px 14px 32px; line-height: 1.75; color: #3a3a3c; }
+      .fold-body { margin: 14px; }
+      .action-card { display: flex; gap: 8px; flex-wrap: wrap; }      .ai-behavior-panel { display: grid; gap: 12px; }
+      .ai-placeholder {
+        color: var(--muted);
+        line-height: 1.75;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+      .ai-result { display: grid; gap: 10px; }
+      .ai-summary {
+        margin: 0;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: var(--surface-soft);
+        color: var(--text);
+        line-height: 1.75;
+        font-weight: 800;
+      }
+      .ai-role-card {
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #fff;
+        line-height: 1.75;
+      }
+      .ai-role-card strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--text);
+        font-size: 15px;
+      }
+      .ai-role-card p { margin: 4px 0; color: #3a3a3c; }
+      .ai-role-card b { color: var(--text); }
+      .footer {
+        margin: 18px auto 6px;
+        max-width: 760px;
+        color: var(--muted);
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.8;
+      }
+
+      @media (max-width: 980px) {
+        .topbar { grid-template-columns: 1fr; }
+        .search-group { grid-template-columns: 1fr auto; }
+        .brand { justify-content: center; }
+        .nav-actions { justify-content: center; }
+        .grid { grid-template-columns: 1fr; }
+        .grid > aside.panel { position: static; max-height: none; overflow: visible; }
+        .filter-group { grid-template-columns: 1fr; }
+        .filter-title { margin-top: 0; }
+      }
+      @media (max-width: 720px) {
+        .app { padding: 12px; }
+        .hero { margin-top: 34px; }
+        .candidate-layout { grid-template-columns: 1fr; }
+        .detail-side { position: static; height: auto; max-height: none; overflow: visible; }
+        .candidate-layout .list { max-height: 520px; }
+        .stats, .stock-item, .buy-zone, .valuation-grid, .conclusion-grid { grid-template-columns: 1fr; }
+        .summary-card { flex-direction: column; }
+        .summary-price { text-align: left; }
+        .score-pill { width: 100%; }
+        .panel { border-radius: 22px; }
+      }
+    </style>
+  </head>
+  
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">A</div>
+          <div>
+            <strong>A股助手</strong>
+            <span>股票 · 指数基金</span>
+          </div>
+        </div>
+        <div class="search-group"><input id="search" class="search" type="search" placeholder="搜索股票、指数基金名称或6位代码" /><button class="search-btn" id="searchBtn" type="button">搜索</button></div>
+        <div class="nav-actions">
+          <button class="btn secondary" id="resetBtn">清空</button>
+          <button class="btn secondary" id="refreshBtn">刷新</button>
+          <button class="btn" id="toggleFavBtn">自选</button>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="stats">
+          <div class="stat"><strong id="statCount">-</strong><span>标的</span></div>
+          <div class="stat"><strong id="statUp" class="up">-</strong><span>上涨</span></div>
+          <div class="stat" title="优选候选：综合推荐分达到80分以上的数量，用来快速看今天更值得优先研究的股票。"><strong id="statTop" class="brand-color">-</strong><span>优选候选</span></div>
+        </div>
+        <details class="minimal-details" open>
+          <summary>数据和热门方向</summary>
+          <div class="hero-note">
+            <span>更新时间：<strong id="updateTime">加载中...</strong></span>
+            <span>价格刷新：<strong>20 秒</strong></span>
+            <span id="refreshState">正在准备实时数据...</span>
+          </div>
+          <div class="pill-row" id="marketChips">
+            <span class="chip">热点方向加载中...</span>
+          </div>
+          <div class="index-row" id="indexRow">
+            <span class="label">大盘信息加载中...</span>
+          </div>
+        </details>
+      </section>
+
+      <main class="grid">
+        <section class="panel candidate-panel">
+          <div class="panel-head">
+            <div>
+              <h2>候选</h2>
+              <div class="small-note"><span id="resultCount">筛选结果 0 个</span></div>
+            </div>
+            <div class="candidate-tools">
+              <button class="btn secondary" id="exportBtn" type="button">导出名单</button>
+            </div>
+          </div>
+          <details class="filter-drawer" open>
+            <summary>筛选条件 <span id="filterSummary">全部市场 / 全部方向 / 全部风险 / 全部波动 / 全部把握</span></summary>
+            <div class="filter-body" id="filterTags"></div>
+          </details>
+          <div class="candidate-layout">
+            <div id="stockList" class="list">
+              <div class="loading">正在加载最新数据...</div>
+            </div>
+            <aside class="detail-side">
+              <div class="panel-head">
+                <div>
+                  <h2>详情</h2>
+                  <div class="small-note">点击左边股票，右侧同步显示</div>
+                </div>
+                <span class="label good" id="currentRank">加载中</span>
+              </div>
+              <div class="detail" id="detailView">
+                <div class="loading">等待最新数据接入...</div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <div class="footer">
+        本工具只做参考，不构成投资建议。价格区间只是筛选参考，操作前请自己再确认。
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+
+</html>
+
+
