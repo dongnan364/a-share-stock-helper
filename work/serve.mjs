@@ -1,0 +1,723 @@
+﻿import http from "node:http";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(process.argv[2] || ".");
+const port = Number(process.env.PORT || process.argv[3] || 4173);
+const host = process.env.HOST || process.argv[4] || "0.0.0.0";
+const bundledPython = "C:\\Users\\16774\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe";
+const pythonExe = process.env.PYTHON_EXE || process.env.PYTHON || (existsSync(bundledPython) ? bundledPython : "python");
+const dataScript = path.join(__dirname, "data_fetcher.py");
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+};
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+const cache = {
+  loadedAt: Date.now(),
+  loading: null,
+  payload: null,
+  lastError: null,
+};
+
+const FALLBACK_PAYLOAD = {
+  summary: {
+    updatedAt: "本地备用数据",
+    total: 3,
+    upCount: 2,
+    downCount: 1,
+    flatCount: 0,
+    avgChange: 0.63,
+    mood: "震荡",
+    indices: [
+      { code: "sh000001", name: "上证指数", point: 3150.12, changePct: 0.42, changeAbs: 13.21, open: 3142.3, high: 3156.8, low: 3138.9, amount: 0 },
+      { code: "sz399001", name: "深证成指", point: 9888.76, changePct: 0.66, changeAbs: 64.4, open: 9832.11, high: 9899.1, low: 9811.4, amount: 0 },
+      { code: "sz399006", name: "创业板指", point: 2011.08, changePct: 1.12, changeAbs: 22.3, open: 1995.7, high: 2015.4, low: 1991.8, amount: 0 },
+    ],
+    hotSectors: [
+      { sector: "AI", count: 4, avgChange: 1.0, amountSum: 0, hotScore: 9.9 },
+      { sector: "机器人", count: 3, avgChange: 0.9, amountSum: 0, hotScore: 9.3 },
+      { sector: "新能源", count: 2, avgChange: 0.6, amountSum: 0, hotScore: 8.3 },
+    ],
+    sectorOptions: ["AI", "机器人", "新能源", "金融", "消费"],
+    topCount: 3,
+  },
+  stocks: [
+    {
+      code: "300750",
+      name: "宁德时代",
+      board: "创业板",
+      market: "创业板",
+      sector: "新能源",
+      province: "福建",
+      city: "宁德",
+      company: "宁德时代新能源科技股份有限公司",
+      listDate: "2018-06-11",
+      floatShares: 0,
+      totalShares: 0,
+      source: "本地备用",
+      symbol: "sz300750",
+      price: 210.5,
+      prevClose: 205.1,
+      changePct: 2.63,
+      changeAbs: 5.4,
+      open: 206.0,
+      high: 212.2,
+      low: 204.8,
+      amplitude: 3.61,
+      volume: 180000,
+      amount: 3789000000,
+      turnover: 0.91,
+      marketCap: 0,
+      score: 93,
+      rank: "重点关注",
+      risk: "高",
+      strategy: "强势趋势",
+      buyZone: [205.7, 208.2],
+      trigger: "等待放量确认后再考虑",
+      confidence: "高",
+      positionPct: 18,
+      support: 205.7,
+      resistance: 208.2,
+      logic: ["新能源方向仍有资金关注。", "创业板波动较大，更适合等趋势确认后再看。"],
+      riskNotes: ["创业板波动可能更大，仓位不要太重。"],
+      sectorRank: 0,
+      hotLabel: "高",
+      themes: ["新能源"],
+      intro: "宁德时代主要从事动力电池、储能电池及新能源相关业务，是新能源车产业链里的核心公司之一。",
+    },
+  ],
+};
+
+cache.payload = FALLBACK_PAYLOAD;
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function sendJson(res, payload, statusCode = 200) {
+  res.writeHead(statusCode, {
+    ...CORS_HEADERS,
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function serveFile(filePath, res) {
+  const ext = path.extname(filePath).toLowerCase();
+  res.writeHead(200, {
+    "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
+    "Cache-Control": "no-store",
+  });
+  createReadStream(filePath).pipe(res);
+}
+
+function runPythonUniverse() {
+  const output = execFileSync(pythonExe, [dataScript, "universe"], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+    maxBuffer: 30 * 1024 * 1024,
+    windowsHide: true,
+  });
+  return JSON.parse(output);
+}
+
+async function loadUniverse() {
+  const ttl = 5 * 60 * 1000;
+  if (cache.payload && Date.now() - cache.loadedAt > ttl) {
+    refreshUniverseInBackground();
+  }
+  return cache.payload || FALLBACK_PAYLOAD;
+}
+
+function refreshUniverseInBackground() {
+  if (cache.loading) {
+    return cache.loading;
+  }
+  cache.loading = Promise.resolve()
+    .then(() => runPythonUniverse())
+    .then((payload) => {
+      cache.payload = payload;
+      cache.loadedAt = Date.now();
+      cache.lastError = null;
+      cache.loading = null;
+      return payload;
+    })
+    .catch((error) => {
+      cache.loading = null;
+      cache.lastError = error;
+      if (!cache.payload) {
+        cache.payload = FALLBACK_PAYLOAD;
+        cache.loadedAt = Date.now();
+      }
+      return cache.payload;
+    });
+  return cache.loading;
+}
+
+setInterval(() => {
+  refreshUniverseInBackground();
+}, 5 * 60 * 1000).unref?.();
+
+refreshUniverseInBackground();
+
+function isAllFilter(value) {
+  return !value || value === "All" || value === "全部";
+}
+
+function marketMatches(filter, itemMarket) {
+  if (isAllFilter(filter)) return true;
+  const mainBoard = ["主板", "Main Board", "沪深主板"];
+  const chiNext = ["创业板", "ChiNext"];
+  if (mainBoard.includes(filter)) return mainBoard.includes(itemMarket);
+  if (chiNext.includes(filter)) return chiNext.includes(itemMarket);
+  return itemMarket === filter;
+}
+
+function riskMatches(filter, itemRisk) {
+  if (isAllFilter(filter)) return true;
+  const riskMap = {
+    低: "low",
+    中: "medium",
+    高: "high",
+    low: "low",
+    medium: "medium",
+    high: "high",
+  };
+  return (riskMap[filter] || filter) === (riskMap[itemRisk] || itemRisk);
+}
+
+function sectorMatches(filter, item) {
+  if (isAllFilter(filter)) return true;
+  const themes = Array.isArray(item.themes) ? item.themes : [];
+  if ((filter === "AI相关" || filter === "AI") && (item.sector === "AI" || themes.includes("AI"))) return true;
+  if ((filter === "机器人相关" || filter === "机器人" || filter === "robotics") && (item.sector === "机器人" || item.sector === "robotics" || themes.includes("机器人"))) return true;
+  return item.sector === filter || themes.includes(filter);
+}
+
+function stockSearchText(item) {
+  return [
+    item.code,
+    item.symbol,
+    item.name,
+    item.company,
+    item.market,
+    item.sector,
+    item.province,
+    item.city,
+    item.intro,
+    ...(Array.isArray(item.themes) ? item.themes : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 1024 * 1024) {
+        req.destroy();
+        reject(new Error("request body too large"));
+      }
+    });
+    req.on("end", () => {
+      if (!body.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("invalid json body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function aiConfig() {
+  const baseUrl = (process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "https://grsai.dakka.com.cn/v1").replace(/\/$/, "");
+  const endpoint = baseUrl.endsWith("/v1/chat/completions")
+    ? baseUrl
+    : baseUrl.endsWith("/chat/completions")
+      ? baseUrl
+      : baseUrl.endsWith("/v1")
+        ? baseUrl + "/chat/completions"
+        : baseUrl + "/v1/chat/completions";
+  return {
+    apiKey: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "",
+    endpoint,
+    model: process.env.AI_MODEL || "gpt-5.4",
+  };
+}
+
+function parseAiJson(content) {
+  const raw = String(content || "").trim();
+  if (!raw) return { summary: "AI\u6ca1\u6709\u8fd4\u56de\u5185\u5bb9\u3002", roles: [], finalWarning: "" };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        // Fall through to text fallback below.
+      }
+    }
+    return { summary: "AI\u8fd4\u56de\u4e86\u975eJSON\u5185\u5bb9\u3002", roles: [], finalWarning: raw.slice(0, 1200) };
+  }
+}
+
+function extractAiContent(payload) {
+  const choice = payload?.choices?.[0] || {};
+  const message = choice.message || {};
+  const content = message.content;
+  if (typeof content === "string" && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const joined = content.map((part) => {
+      if (typeof part === "string") return part;
+      return part?.text || part?.content || part?.value || "";
+    }).join(" ").trim();
+    if (joined) return joined;
+  }
+  const candidates = [
+    message.reasoning_content,
+    message.output_text,
+    choice.text,
+    payload?.output_text,
+    payload?.result,
+    payload?.data?.content,
+    payload?.data?.text,
+    payload?.data?.result,
+  ];
+  return candidates.find((item) => typeof item === "string" && item.trim()) || "";
+}
+
+function compactPayloadForDebug(payload) {
+  try {
+    const json = JSON.stringify(payload || {});
+    return json.length > 1600 ? json.slice(0, 1600) + "..." : json;
+  } catch {
+    return String(payload || "").slice(0, 1600);
+  }
+}
+
+function emptyAiAnalysis(payload) {
+  return {
+    summary: "AI\u63a5\u53e3\u5df2\u8c03\u7528\u6210\u529f\uff0c\u4f46\u6a21\u578b\u6ca1\u6709\u8fd4\u56de\u53ef\u663e\u793a\u7684\u6b63\u6587\u3002\u4f60\u770b\u5230\u6263\u5206\uff0c\u5c31\u662f\u6263\u5728\u8fd9\u6b21\u7a7a\u8fd4\u56de\u4e0a\u3002",
+    conclusion: {
+      view: "\u6a21\u578b\u7a7a\u8fd4\u56de",
+      confidence: "\u65e0\u6cd5\u5224\u65ad",
+      position: "\u5148\u4e0d\u8981\u6309AI\u7ed3\u679c\u64cd\u4f5c",
+      scoreReason: "\u540e\u7aef\u6ca1\u6709\u6536\u5230\u6a21\u578b\u6b63\u6587\uff0c\u53ea\u6536\u5230\u63a5\u53e3\u72b6\u6001\u3002",
+    },
+    buyPoint: { range: "\u65e0\u6570\u636e", timing: "\u7b49\u5f85\u6a21\u578b\u6b63\u5e38\u8fd4\u56de", weakLine: "\u65e0\u6570\u636e", reason: "\u6a21\u578b\u7a7a\u8fd4\u56de\uff0c\u4e0d\u80fd\u751f\u6210\u4e70\u70b9\u3002" },
+    recentMove: { title: "\u6a21\u578b\u7a7a\u8fd4\u56de", sourceType: "\u63a5\u53e3\u6210\u529f\u4f46\u6b63\u6587\u4e3a\u7a7a", reasons: ["\u5e73\u53f0\u8fd4\u56de\u6210\u529f\uff0c\u4f46\u6ca1\u6709\u7ed9\u51fa\u6b63\u6587\u5185\u5bb9\u3002", "\u5efa\u8bae\u6362\u4e00\u4e2a\u6587\u672c\u5bf9\u8bdd\u6a21\u578b\uff0c\u6216\u68c0\u67e5\u8be5\u6a21\u578b\u662f\u5426\u652f\u6301 /v1/chat/completions\u3002"], notice: "\u8fd9\u4e0d\u662f\u80a1\u7968\u5206\u6790\u7ed3\u8bba\uff0c\u53ea\u662f\u63a5\u53e3\u8bca\u65ad\u3002" },
+    riskControl: { chaseRisk: "\u65e0\u6570\u636e", stopLoss: "\u65e0\u6570\u636e", takeProfit1: "\u65e0\u6570\u636e", takeProfit2: "\u65e0\u6570\u636e", trailingStop: "\u65e0\u6570\u636e", reason: "\u6a21\u578b\u7a7a\u8fd4\u56de\uff0c\u4e0d\u80fd\u751f\u6210\u98ce\u63a7\u7ebf\u3002" },
+    roles: [],
+    finalWarning: "raw=" + compactPayloadForDebug(payload),
+  };
+}
+
+function compactStockForAi(input) {
+  const stock = input || {};
+  return {
+    code: stock.code,
+    name: stock.name,
+    market: stock.market,
+    sector: stock.sector,
+    themes: stock.themes,
+    intro: stock.intro,
+    price: stock.price,
+    changePct: stock.changePct,
+    high: stock.high,
+    low: stock.low,
+    amplitude: stock.amplitude,
+    turnover: stock.turnover,
+    amount: stock.amount,
+    score: stock.score,
+    confidence: stock.confidence,
+    risk: stock.risk,
+    strategy: stock.strategy,
+    buyZone: stock.buyZone,
+    support: stock.support,
+    resistance: stock.resistance,
+    trigger: stock.trigger,
+    logic: stock.logic,
+    riskNotes: stock.riskNotes,
+  };
+}
+
+function aiPromptForStock(stock, context) {
+  return [
+    "\u4f60\u662f\u8c28\u614e\u7684A\u80a1\u5206\u6790\u52a9\u624b\u3002\u4e0d\u8981\u627f\u8bfa\u6536\u76ca\uff0c\u4e0d\u8981\u8bf4\u4e00\u5b9a\u4f1a\u6da8\u3002",
+    "\u8bf7\u7528\u7b80\u4f53\u4e2d\u6587\u5206\u6790\u8fd9\u53ea\u80a1\u7968\uff0c\u5c3d\u91cf\u5177\u4f53\uff0c\u4e0d\u8981\u5957\u6a21\u677f\u3002",
+    "\u91cd\u70b9\u7ed3\u5408\uff1a\u5f53\u524d\u4ef7\u3001\u6da8\u8dcc\u5e45\u3001\u6700\u9ad8/\u6700\u4f4e\u3001\u6ce2\u52a8\u7387\u3001\u6210\u4ea4\u989d\u3001\u884c\u4e1a\u65b9\u5411\u3001\u53c2\u8003\u4e70\u70b9\u3001\u6b62\u635f\u6b62\u76c8\u7ebf\u3002",
+    "\u5fc5\u987b\u6309\u4e0b\u9762\u6807\u9898\u8f93\u51fa\u666e\u901a\u6587\u672c\uff0c\u4e0d\u8981\u5f3a\u5236JSON\uff1a",
+    "\u3010\u5148\u770b\u7ed3\u8bba\u3011\u73b0\u5728\u9002\u4e0d\u9002\u5408\u770b\uff0c\u539f\u56e0\u662f\u4ec0\u4e48\u3002",
+    "\u3010\u53c2\u8003\u4e70\u70b9\u3011\u7ed9\u51fa\u4e09\u4f4d\u5c0f\u6570\u4ef7\u683c\u533a\u95f4\uff0c\u5e76\u8bf4\u660e\u4e3a\u4ec0\u4e48\u662f\u8fd9\u4e2a\u533a\u95f4\u3002",
+    "\u3010\u8fd1\u671f\u4e3a\u4f55\u6da8\u8dcc\u3011\u8bf4\u660e\u66f4\u50cf\u653f\u7b56\u3001\u884c\u4e1a\u3001\u516c\u53f8\u4e8b\u4ef6\u3001\u8d44\u91d1\u60c5\u7eea\u3001\u5238\u5546\u7814\u62a5\u3001\u56fd\u5185\u5916\u5c40\u52bf\uff0c\u8fd8\u662f\u4ec5\u4ece\u884c\u60c5\u63a8\u65ad\u3002\u4e0d\u80fd\u7f16\u9020\u65b0\u95fb\u3002",
+    "\u3010\u8ffd\u6da8\u98ce\u9669/\u6b62\u76c8\u6b62\u635f\u3011\u7ed9\u51fa\u6b62\u635f\u7ebf\u3001\u7b2c\u4e00\u6b62\u76c8\u3001\u7b2c\u4e8c\u6b62\u76c8\u3001\u79fb\u52a8\u6b62\u76c8\uff0c\u4ef7\u683c\u4fdd\u7559\u4e09\u4f4d\u5c0f\u6570\u3002",
+    "\u3010\u4e0d\u540c\u4eba\u901a\u5e38\u600e\u4e48\u64cd\u4f5c\u3011\u5206\u522b\u5199\u666e\u901a\u6563\u6237\u3001\u5238\u5546/\u673a\u6784\u3001\u6e38\u8d44/\u77ed\u7ebf\u8d44\u91d1\u3001\u4ef7\u503c\u6295\u8d44\u8005\u5728\u5f53\u524d\u4ef7\u683c\u548c\u6ce2\u52a8\u4e0b\u53ef\u80fd\u600e\u4e48\u505a\u3001\u4e3a\u4ec0\u4e48\u3001\u5bb9\u6613\u9519\u5728\u54ea\u3001\u66f4\u7a33\u505a\u6cd5\u3002",
+    "\u80a1\u7968\u6570\u636e\uff1a" + JSON.stringify(stock),
+    "\u5df2\u6709\u98ce\u63a7/\u4e0a\u4e0b\u6587\uff1a" + JSON.stringify(context || {}),
+  ].join("\n");
+}
+
+function textAnalysisToStructured(content) {
+  const text = String(content || "").trim();
+  return {
+    summary: text || "AI\u8fd4\u56de\u4e86\u7a7a\u6587\u672c\u3002",
+    conclusion: { view: "AI\u5df2\u8fd4\u56de\u6587\u672c\u5206\u6790", confidence: "\u9700\u8981\u4eba\u5de5\u590d\u6838", position: "\u6309\u6587\u672c\u5efa\u8bae\u8c28\u614e\u63a7\u5236\u4ed3\u4f4d", scoreReason: text.slice(0, 260) },
+    buyPoint: { range: "\u89c1AI\u6587\u672c", timing: "\u89c1AI\u6587\u672c", weakLine: "\u89c1AI\u6587\u672c", reason: text.slice(0, 500) },
+    recentMove: { title: "AI\u6587\u672c\u5206\u6790", sourceType: "\u89c1AI\u6587\u672c", reasons: [text.slice(0, 900)], notice: "\u6a21\u578b\u8fd4\u56de\u7684\u662f\u666e\u901a\u6587\u672c\uff0c\u9875\u9762\u5df2\u4fdd\u7559\u539f\u6587\uff0c\u907f\u514d\u767d\u767d\u6263\u5206\u3002" },
+    riskControl: { chaseRisk: "\u89c1AI\u6587\u672c", stopLoss: "\u89c1AI\u6587\u672c", takeProfit1: "\u89c1AI\u6587\u672c", takeProfit2: "\u89c1AI\u6587\u672c", trailingStop: "\u89c1AI\u6587\u672c", reason: text.slice(0, 500) },
+    roles: [
+      { role: "AI\u539f\u6587", action: text, why: "\u6a21\u578b\u8fd4\u56de\u4e86\u666e\u901a\u6587\u672c\uff0c\u4e0d\u662f\u4e25\u683cJSON\u3002", risk: "\u9700\u8981\u4eba\u5de5\u590d\u6838\uff0c\u4e0d\u8981\u76f4\u63a5\u5f53\u6295\u8d44\u5efa\u8bae\u3002", betterMove: "\u7ed3\u5408K\u7ebf\u3001\u6210\u4ea4\u91cf\u548c\u81ea\u5df1\u7684\u98ce\u9669\u627f\u53d7\u80fd\u529b\u518d\u5224\u65ad\u3002" }
+    ],
+    finalWarning: "AI\u539f\u6587\u5df2\u5c55\u793a\uff1b\u8fd9\u4e0d\u662f\u6295\u8d44\u5efa\u8bae\u3002",
+  };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      const timeoutError = new Error("AI\u6a21\u578b\u63a5\u53e3\u8d85\u8fc7" + Math.round(timeoutMs / 1000) + "\u79d2\u6ca1\u6709\u8fd4\u56de\uff0c\u5df2\u505c\u6b62\u7b49\u5f85\u3002\u539f\u56e0\u901a\u5e38\u662f\u6a21\u578b\u592a\u6162\u3001\u63a5\u53e3\u670d\u52a1\u62e5\u5835\uff0c\u6216 AI_BASE_URL \u8f6c\u53d1\u4e0d\u7a33\u5b9a\u3002");
+      timeoutError.code = "AI_TIMEOUT";
+      throw timeoutError;
+    }
+    const networkError = new Error("\u540e\u7aef\u8fde\u4e0d\u4e0aAI\u6a21\u578b\u63a5\u53e3\uff1a" + (error.message || String(error)) + "\u3002\u8bf7\u68c0\u67e5 AI_BASE_URL \u662f\u5426\u80fd\u4ece Render \u670d\u52a1\u5668\u8bbf\u95ee\u3002");
+    networkError.code = "AI_NETWORK_ERROR";
+    throw networkError;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function describeAiPayload(payload) {
+  const choice = payload?.choices?.[0] || null;
+  const message = choice?.message || null;
+  const content = message?.content;
+  return {
+    topKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : [],
+    choiceCount: Array.isArray(payload?.choices) ? payload.choices.length : 0,
+    firstChoiceKeys: choice && typeof choice === "object" ? Object.keys(choice) : [],
+    messageKeys: message && typeof message === "object" ? Object.keys(message) : [],
+    finishReason: choice?.finish_reason || choice?.finishReason || "",
+    contentType: Array.isArray(content) ? "array" : typeof content,
+    contentLength: typeof content === "string" ? content.trim().length : Array.isArray(content) ? content.length : 0,
+    extractedContentLength: extractAiContent(payload).length,
+    rawPreview: compactPayloadForDebug(payload),
+  };
+}
+
+async function diagnoseAiOnce() {
+  const config = aiConfig();
+  if (!config.apiKey) {
+    const error = new Error("\u540e\u7aef\u6ca1\u6709\u914d\u7f6e AI_API_KEY\uff0c\u6240\u4ee5\u6a21\u578b\u6839\u672c\u6ca1\u6709\u88ab\u8c03\u7528\u3002");
+    error.code = "NO_AI_KEY";
+    throw error;
+  }
+  const startedAt = Date.now();
+  const response = await fetchWithTimeout(config.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + config.apiKey,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      stream: false,
+      messages: [{ role: "user", content: "\u53ea\u56de\u590d\u4e24\u4e2a\u5b57\uff1a\u6536\u5230" }],
+    }),
+  }, 25000);
+  const responseText = await response.text().catch(() => "");
+  let payload = null;
+  try { payload = responseText ? JSON.parse(responseText) : null; } catch { payload = { rawText: responseText }; }
+  const content = extractAiContent(payload);
+  const shape = describeAiPayload(payload);
+  return {
+    ok: response.ok && Boolean(content),
+    model: config.model,
+    endpoint: config.endpoint.replace(/https?:\/\//, ""),
+    httpStatus: response.status,
+    elapsedMs: Date.now() - startedAt,
+    contentLength: content.length,
+    contentPreview: content.slice(0, 200),
+    providerError: payload?.error?.message || "",
+    reason: !response.ok
+      ? "AI_HTTP_ERROR"
+      : content
+        ? "AI_CONTENT_OK"
+        : "AI_EMPTY_RESPONSE",
+    shape,
+  };
+}
+
+async function callAiParticipantAnalysis(stock, context) {
+  const config = aiConfig();
+  if (!config.apiKey) {
+    const error = new Error("后端还没有配置 AI_API_KEY，所以暂时不能调用真正的AI分析。");
+    error.code = "NO_AI_KEY";
+    throw error;
+  }
+  const response = await fetchWithTimeout(config.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + config.apiKey,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      temperature: 0.35,
+      stream: false,
+      max_tokens: 2500,
+      messages: [
+        { role: "system", content: "You are a cautious, concrete A-share analysis assistant. Never promise profit." },
+        { role: "user", content: aiPromptForStock(stock, context) },
+      ],
+    }),
+  }, 25000);
+  const responseText = await response.text().catch(() => "");
+  let payload = null;
+  try { payload = responseText ? JSON.parse(responseText) : null; } catch { payload = { rawText: responseText }; }
+  if (!response.ok) {
+    const error = new Error("AI\u670d\u52a1\u8fd4\u56deHTTP " + response.status + "\uff1a" + (payload?.error?.message || responseText.slice(0, 500) || "\u6ca1\u6709\u8fd4\u56de\u5177\u4f53\u9519\u8bef"));
+    error.code = "AI_HTTP_" + response.status;
+    throw error;
+  }
+  const content = extractAiContent(payload);
+  if (!content) {
+    const error = new Error("AI\u63a5\u53e3\u8c03\u7528\u6210\u529f\u4f46\u6ca1\u6709\u8fd4\u56de\u6b63\u6587\uff0c\u4e5f\u5c31\u662f\u6263\u5206\u4f46\u9875\u9762\u6ca1\u7ed3\u679c\u3002\u539f\u59cb\u8fd4\u56de\u6458\u8981\uff1a" + compactPayloadForDebug(payload));
+    error.code = "AI_EMPTY_RESPONSE";
+    throw error;
+  }
+  const parsed = parseAiJson(content);
+  if (parsed && parsed.roles && Array.isArray(parsed.roles) && parsed.roles.length) return parsed;
+  return textAnalysisToStructured(content);
+}
+
+function searchRank(item, keyword) {
+  const code = String(item.code || "").toLowerCase();
+  const symbol = String(item.symbol || "").toLowerCase();
+  const name = String(item.name || "").toLowerCase();
+  const company = String(item.company || "").toLowerCase();
+
+  if (code === keyword || symbol === keyword || name === keyword) return 1000;
+  if (code.startsWith(keyword) || symbol.startsWith(keyword) || name.startsWith(keyword)) return 900;
+  if (name.includes(keyword) || code.includes(keyword) || symbol.includes(keyword)) return 850;
+  if (company.includes(keyword)) return 820;
+  return 0;
+}
+async function handleApi(url, res, req) {
+  const universe = await loadUniverse();
+
+  if (url.pathname === "/api/refresh") {
+    refreshUniverseInBackground();
+    sendJson(res, {
+      ok: true,
+      refreshing: Boolean(cache.loading),
+      updatedAt: cache.payload?.summary?.updatedAt || null,
+      lastError: cache.lastError ? String(cache.lastError.message || cache.lastError) : null,
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/bootstrap") {
+    sendJson(res, { ok: true, summary: universe.summary, updatedAt: universe.summary?.updatedAt || null });
+    return true;
+  }
+
+  if (url.pathname === "/api/options") {
+    sendJson(res, {
+      ok: true,
+      marketOptions: ["全部", "主板", "创业板"],
+      sectorOptions: ["全部", ...new Set(["AI", "机器人", ...(universe.summary?.sectorOptions || [])])],
+      riskOptions: ["全部", "低", "中", "高"],
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/stocks") {
+    const params = url.searchParams;
+    const market = params.get("market") || "全部";
+    const sector = params.get("sector") || "全部";
+    const risk = params.get("risk") || "全部";
+    const search = (params.get("search") || "").trim().toLowerCase();
+    const limit = clamp(Number(params.get("limit") || 24), 1, 60);
+    const page = clamp(Number(params.get("page") || 1), 1, 1000);
+
+    let items = (universe.stocks || []).filter((item) => {
+      if (search) {
+        return stockSearchText(item).includes(search);
+      }
+
+      const marketHit = marketMatches(market, item.market);
+      const sectorHit = sectorMatches(sector, item);
+      const riskHit = riskMatches(risk, item.risk);
+      return marketHit && sectorHit && riskHit;
+    });
+
+    items = items.sort((a, b) => {
+      if (search) {
+        return searchRank(b, search) - searchRank(a, search) || b.score - a.score;
+      }
+      return b.score - a.score;
+    });
+    const total = items.length;
+    const start = (page - 1) * limit;
+    const sliced = items.slice(start, start + limit);
+
+    sendJson(res, {
+      ok: true,
+      total,
+      page,
+      limit,
+      stocks: sliced,
+      updatedAt: universe.summary?.updatedAt || null,
+      searchMode: Boolean(search),
+      keyword: params.get("search") || "",
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/ai/status") {
+    const config = aiConfig();
+    sendJson(res, {
+      ok: true,
+      ai: {
+        configured: Boolean(config.apiKey),
+        model: config.model,
+        endpoint: config.endpoint.replace("/chat/completions", ""),
+      },
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/ai/debug-test") {
+    try {
+      const diagnosis = await diagnoseAiOnce();
+      sendJson(res, { ok: diagnosis.ok, diagnosis }, diagnosis.ok ? 200 : 502);
+    } catch (error) {
+      const statusCode = error.code === "NO_AI_KEY" ? 501 : error.code === "AI_TIMEOUT" ? 504 : 500;
+      sendJson(res, { ok: false, code: error.code || "AI_DEBUG_ERROR", message: error.message || "AI\u8bca\u65ad\u5931\u8d25" }, statusCode);
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/ai/participant-behavior") {
+    if (req.method !== "POST") {
+      sendJson(res, { ok: false, message: "method not allowed" }, 405);
+      return true;
+    }
+    try {
+      const body = await readJsonBody(req);
+      const stock = compactStockForAi(body.stock || {});
+      const context = body.context || {};
+      if (!stock.code || !stock.name) {
+        sendJson(res, { ok: false, message: "缺少股票数据" }, 400);
+        return true;
+      }
+      const analysis = await callAiParticipantAnalysis(stock, context);
+      sendJson(res, { ok: true, source: "ai", analysis });
+    } catch (error) {
+      const statusCode = error.code === "NO_AI_KEY" ? 501 : error.code === "AI_TIMEOUT" ? 504 : error.code === "AI_EMPTY_RESPONSE" ? 502 : 500;
+      sendJson(res, { ok: false, message: error.message || "AI\u5206\u6790\u5931\u8d25", code: error.code || "AI_ERROR" }, statusCode);
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/stock") {
+    const code = url.searchParams.get("code") || "";
+    const stock = (universe.stocks || []).find((item) => item.code === code);
+    if (!stock) {
+      sendJson(res, { ok: false, message: "not found" }, 404);
+      return true;
+    }
+    sendJson(res, { ok: true, stock });
+    return true;
+  }
+
+  return false;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, CORS_HEADERS);
+      res.end();
+      return;
+    }
+const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+
+    if (requestUrl.pathname.startsWith("/api/")) {
+      const handled = await handleApi(requestUrl, res, req);
+      if (!handled) {
+        sendJson(res, { ok: false, message: "not found" }, 404);
+      }
+      return;
+    }
+
+    let filePath = path.join(root, decodeURIComponent(requestUrl.pathname));
+    if (requestUrl.pathname === "/") {
+      filePath = path.join(root, "index.html");
+    }
+
+    if (existsSync(filePath) && statSync(filePath).isDirectory()) {
+      filePath = path.join(filePath, "index.html");
+    }
+
+    if (existsSync(filePath) && statSync(filePath).isFile()) {
+      serveFile(filePath, res);
+      return;
+    }
+
+    const fallback = path.join(root, "index.html");
+    if (existsSync(fallback)) {
+      serveFile(fallback, res);
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not Found");
+  } catch (error) {
+    sendJson(res, { ok: false, message: error.message || "server error" }, 500);
+  }
+});
+
+server.listen(port, host, () => {
+  console.log(`Serving ${root} at http://${host}:${port}`);
+});
+
+
+
+
+
+
+
+
